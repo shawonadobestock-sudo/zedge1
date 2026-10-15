@@ -4362,9 +4362,8 @@ jobs:
           GATE_SLOTS: ${{ needs.gate.outputs.slots }}
           GATE_RETRY_SLOTS: ${{ needs.gate.outputs.retries }}
           UPLOADS_PER_RUN: ${{ needs.gate.outputs.count || '1' }}
-          # MH-EARNINGS: where the dashboard lives + its shared ingest token
-          MH_DRIVE_URL: ${{ secrets.MH_DRIVE_URL }}
-          MH_DRIVE_TOKEN: ${{ secrets.MH_DRIVE_TOKEN }}
+          # MH-EARNINGS: payout threshold in USD (the report is saved to this
+          # account's own Firebase: dashboardSettings/earnings)
           EARN_THRESHOLD: "50"
 
         run: node bot.js
