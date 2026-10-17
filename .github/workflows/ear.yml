@@ -848,7 +848,7 @@ jobs:
           // Keep dismissing Zedge privacy/cookie/data-collection popups whenever they appear
 
           /* ---------- MH-EARNINGS v33 collector (from the upload bot) ---------- */
-          /* MH-EARNINGS v33.3 - synced with Chrome extension v1.6.0 + series     */
+          /* MH-EARNINGS v33.4 - synced with Chrome extension v1.6.0 + series     */
           /* split & single-month / paid-previous-month fixes.                  */
           /* ------------------------------------------------------------------ */
           const EARN_THRESHOLD = Number(process.env.EARN_THRESHOLD || "50") || 50;
@@ -987,14 +987,22 @@ jobs:
             let best = null;
             for (let i = 0; i < lines.length; i++) {
               const line = lines[i];
-              const joined = [line, lines[i + 1] || "", lines[i + 2] || "", lines[i + 3] || ""].join(" ");
-              const when = earnParseMonth(line) || earnParseMonth(joined);
-              if (!when) continue;
+              /* v33.4: the paid month must be on THIS line (the "Reason" cell, e.g.
+                 "Zedge Premium Royalties SEPTEMBER 2026"); the date/method come from the
+                 cells before it and the amount from this line or the next two. Looking
+                 4 lines ahead used to glue the next row's data onto the wrong month. */
               if (/payment\s*method|payment\s*date/i.test(line)) continue;
-              const amount = earnMoney((joined.match(/\$\s?[\d,]+(?:\.\d{1,2})?/) || [])[0]);
+              const when = earnParseMonth(line);
+              if (!when) continue;
+              const prev = [lines[i - 3] || "", lines[i - 2] || "", lines[i - 1] || ""].join(" ");
+              const dateRx = /[A-Z][a-z]+\s+\d{1,2},\s*20\d{2}/;
+              const paidOn = (line.match(dateRx) || prev.match(dateRx) || [""])[0];
+              if (!paidOn && !/royalt/i.test(line)) continue;
+              const near = [line, lines[i + 1] || "", lines[i + 2] || ""].join(" ");
+              const amount = earnMoney((near.match(/\$\s?[\d,]+(?:\.\d{1,2})?/) || [])[0]);
               if (amount == null) continue;
-              const paidOn = (joined.match(/[A-Z][a-z]+\s+\d{1,2},\s*20\d{2}/) || [""])[0];
-              const method = (joined.match(/\b(DOTS|PAYPAL|PayPal|Paypal|Payoneer|Wire|Bank)\b/) || [""])[0];
+              const method = ((line + " " + prev).match(/\b(DOTS|PAYPAL|PayPal|Paypal|Payoneer|Wire|Bank)\b/) || [""])[0];
+              const joined = (prev + " " + near);
               const key = when.y * 12 + when.m;
               if (!payments.some((p) => p.monthKey === key)) {
                 payments.push({
@@ -1290,6 +1298,7 @@ jobs:
             if (!res || !res.ok) throw new Error(`day ${day} not clickable in ${headerText} (${res ? res.reason : "unknown"})`);
             await page.waitForTimeout(450);
             earnLog(`clicked ${day} in ${headerText}${res.changed ? "" : " (no visual change!)"}`);
+            return !!res.changed;
           }
 
           async function earnApply(page) {
@@ -1675,18 +1684,28 @@ jobs:
             const sh = await earnShowMonth(page, start.y, start.m);
             await earnClickDay(page, sh, start.d);
             const eh = await earnShowMonth(page, end.y, end.m);
-            await earnClickDay(page, eh, end.d);
+            /* v33.4: future days are disabled in the Zedge picker. If the end day does not
+               select, walk back one day at a time (max 3) - never past the start day. */
+            let endOk = await earnClickDay(page, eh, end.d);
+            for (let back = 1; !endOk && back <= 3 && end.d - 1 >= 1 && !(end.y === start.y && end.m === start.m && end.d - 1 < start.d); back++) {
+              end.d -= 1;
+              earnLog(`end day not selectable - trying ${end.d}`);
+              endOk = await earnClickDay(page, eh, end.d);
+            }
             await earnApply(page);
             return await earnPeriodValue(page);
           }
 
           async function earnRange(page, start, end) {
             const wantStart = `${start.y}/${earnPad(start.m + 1)}/${earnPad(start.d)}`;
-            const wantEnd = `${end.y}/${earnPad(end.m + 1)}/${earnPad(end.d)}`;
+            const endD0 = end.d;
+            let wantEnd = `${end.y}/${earnPad(end.m + 1)}/${earnPad(end.d)}`;
             let shown = "";
             for (let attempt = 1; attempt <= 2; attempt++) {
               try {
+                end.d = endD0;
                 shown = await earnPickRange(page, start, end);
+                wantEnd = `${end.y}/${earnPad(end.m + 1)}/${earnPad(end.d)}`;
                 if (shown.includes(wantStart) && shown.includes(wantEnd)) break;
                 earnLog(`attempt ${attempt}: picker applied "${shown}", expected ${wantStart} - ${wantEnd}`);
               } catch (err) {
@@ -1841,7 +1860,8 @@ jobs:
             const pY = curM === 0 ? curY - 1 : curY, pM = (curM + 11) % 12;
             const start = { y: sY, m: sM, d: 1 };
             const prevEnd = { y: pY, m: pM, d: earnDaysInMonth(pY, pM) };
-            const mEnd = { y: curY, m: curM, d: earnDaysInMonth(curY, curM) };
+            /* v33.4: the running month ends TODAY (Dhaka) - later days are disabled in the picker. */
+            const mEnd = { y: curY, m: curM, d: nowDhaka.getUTCDate() };
 
             const hasClosedPeriod = (sY * 12 + sM) <= (pY * 12 + pM);
             let closed = null, mtd = null;
